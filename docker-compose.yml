@@ -1,0 +1,11 @@
+services:
+  dev:
+    build: .
+    container_name: game-reviews
+    volumes:
+      - .:/app
+      - ~/.aws:/root/.aws:ro
+    env_file:
+      - .env
+    tty: true
+    stdin_open: true
