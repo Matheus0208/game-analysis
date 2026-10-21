@@ -160,7 +160,3 @@ docker compose down
 - [ ] Análise de sentimento das avaliações
 - [ ] CI/CD com GitHub Actions
 - [ ] Infraestrutura como código
-
-## 💰 Custos
-
-O projeto é desenhado para ter custo mínimo: serviços cobrados por uso, dados em Parquet particionado e um alerta de orçamento configurado no AWS Budgets.
