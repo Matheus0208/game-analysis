@@ -1,6 +1,6 @@
 # 🎮 AWS Game Analysis
 
-Pipeline de engenharia de dados que coleta, processa e analisa avaliações de jogos da Steam usando **Python**, **SQL** e serviços **serverless da AWS**.
+Pipeline de engenharia de dados que coleta, processa e analisa dados e avaliações de jogos da [RAWG](https://rawg.io/apidocs) usando **Python**, **SQL** e serviços **serverless da AWS**.
 
 > 🚧 **Projeto em desenvolvimento.** O status de cada etapa está no [Roadmap](#-roadmap).
 
@@ -8,19 +8,27 @@ Pipeline de engenharia de dados que coleta, processa e analisa avaliações de j
 
 ## 📌 Objetivo
 
-Construir um pipeline em lote, de ponta a ponta, que transforma avaliações brutas de jogos em tabelas analíticas capazes de responder perguntas como:
+Construir um pipeline em lote, de ponta a ponta, que transforma dados brutos de jogos em tabelas analíticas capazes de responder:
 
-- Quais jogos têm grande diferença entre as avaliações recentes e as históricas (sinal de *review bombing* ou de uma atualização marcante)?
-- O tempo de jogo do autor influencia se a avaliação é positiva?
-- Como o sentimento das avaliações evolui após um lançamento ou atualização?
-- Quais gêneros têm melhor avaliação por faixa de preço?
+1. Jogos gratuitos são mais bem avaliados que os pagos?
+2. Qual gênero é o mais bem avaliado entre os lançamentos recentes?
+3. Quais desenvolvedoras e publicadoras têm a melhor média de avaliação?
+4. Jogos gratuitos são mais abandonados que os pagos?
+5. Quais gêneros estão perdendo espaço ao longo dos anos?
+6. Em quais gêneros a crítica e os jogadores mais discordam?
 
-## 🗂️ Fontes de dados
+## 🗂️ Fonte de dados
 
-| Fonte | O que fornece |
-|---|---|
-| API de reviews da Steam | Texto da avaliação, recomendação, horas jogadas e data |
-| API da Steam Store (appdetails) | Gênero, preço, desenvolvedora e data de lançamento |
+| Endpoint da RAWG | O que fornece | Frequência |
+|---|---|---|
+| `/games` | Gêneros, tags, nota dos usuários, quantidade de avaliações, Metacritic, status dos jogadores (jogando, zerado, abandonado...) e data de lançamento | Semanal (fotografia completa) |
+| `/games/{id}` | Desenvolvedoras e publicadoras | Só para jogos novos ou atualizados |
+
+### Limitações conhecidas
+
+- As avaliações e os status refletem os usuários da RAWG, uma base menor e diferente das lojas.
+- A tag *Free to Play* é atribuída pela comunidade e pode ter falhas.
+- Os status de jogo (abandonado, zerado) são declarados pelos usuários, não medidos.
 
 ## 🏗️ Arquitetura
 
@@ -28,7 +36,7 @@ O projeto segue a **arquitetura medallion**, com os dados organizados em três c
 
 ```mermaid
 flowchart LR
-    A[APIs da Steam] --> B[AWS Lambda<br/>imagem Docker no ECR]
+    A[API da RAWG] --> B[AWS Lambda<br/>imagem Docker no ECR]
     B --> C[(S3 Bronze<br/>JSON bruto)]
     C --> D[AWS Glue<br/>PySpark]
     D --> E[(S3 Silver<br/>Parquet limpo)]
@@ -53,7 +61,8 @@ flowchart LR
 - **Processamento em lote, não streaming:** as perguntas do projeto não exigem dados em tempo real, e uma coleta diária é suficiente e muito mais barata.
 - **Serverless:** Lambda, Glue e Athena são cobrados por uso. Sem servidores ligados 24 horas, o custo do projeto fica próximo de zero.
 - **Parquet particionado:** o Athena cobra pelo volume de dados lidos; o formato colunar e as partições reduzem drasticamente esse volume.
-- **Lambda com imagem Docker:** as dependências (pandas, pyarrow e bibliotecas de NLP) podem ultrapassar o limite do pacote zip da Lambda.
+- **Lambda com imagem Docker:** o mesmo ambiente testado localmente vai para produção, sem depender do limite de tamanho do pacote zip da Lambda.
+- **Fotografias semanais:** salvar a lista completa de jogos toda semana, particionada por data, cria um histórico próprio para analisar tendências.
 - **Athena em vez de Redshift:** atende ao volume do projeto sem o custo de um data warehouse dedicado.
 
 ## 🧰 Tecnologias
@@ -144,23 +153,27 @@ docker compose down
 
 - Credenciais da AWS ficam apenas em `~/.aws` na máquina local.
 - O `.env` está no `.gitignore` e no `.dockerignore`, então não vai para o GitHub nem para a imagem.
+- A chave da API da RAWG fica no `.env` localmente e em variável de ambiente na Lambda, nunca no código.
 - O pipeline usa um usuário IAM dedicado, nunca a conta root.
 
 ## 🗺️ Roadmap
 
 - [x] Definir objetivo, fontes de dados e arquitetura
 - [x] Ambiente de desenvolvimento com Docker
-- [ ] Configuração da conta AWS (orçamento, buckets S3, ECR, IAM)
-- [ ] Ingestão incremental das APIs da Steam → bronze
+- [x] Configuração da conta AWS (orçamento, buckets S3, ECR, IAM)
+- [ ] Ingestão da API da RAWG → bronze
 - [ ] Transformação com Glue → silver
 - [ ] Modelagem em esquema estrela e tabelas gold no Athena
 - [ ] Orquestração com Step Functions e EventBridge
 - [ ] Validações de qualidade de dados e monitoramento
 - [ ] Dashboard
-- [ ] Análise de sentimento das avaliações
 - [ ] CI/CD com GitHub Actions
 - [ ] Infraestrutura como código
 
 ## 💰 Custos
 
 O projeto é desenhado para ter custo mínimo: serviços cobrados por uso, dados em Parquet particionado e um alerta de orçamento configurado no AWS Budgets.
+
+## 👤 Autor
+
+**Matheus** — [LinkedIn](#) · [GitHub](#)
