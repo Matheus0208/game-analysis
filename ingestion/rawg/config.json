@@ -1,0 +1,8 @@
+{
+  "release_start": "2015-01-01",
+  "ordering": "-added",
+  "page_size": 40,
+  "max_pages": 50,
+  "max_details_per_run": 300,
+  "pause_seconds": 1
+}
