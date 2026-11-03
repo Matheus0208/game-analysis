@@ -26,7 +26,7 @@ def create_session():
     retry = Retry(
         total=5,
         backoff_factor=2,
-        status_forcelist=[429, 500, 502, 503, 504],
+        status_forcelist=[429, 500, 502, 503, 504, 520, 521, 522, 523, 524],
         allowed_methods=["GET"],
     )
     adapter = HTTPAdapter(max_retries=retry)
@@ -62,6 +62,9 @@ def fetch_games_list(session, config, api_key):
         if not data.get("next"):
             break
 
+        if not response.ok:
+            raise RuntimeError(f"RAWG respondeu com status {response.status_code}")
+
         time.sleep(config["pause_seconds"])
 
     return games
@@ -74,6 +77,9 @@ def fetch_game_details(session, game_id, api_key):
         timeout=30,
     )
     response.raise_for_status()
+
+    if not response.ok:
+        raise RuntimeError(f"RAWG respondeu com status {response.status_code}")
 
     return response.json()
 
@@ -152,14 +158,26 @@ def lambda_handler(event, context):
         except requests.RequestException as error:
             print(f"Falha nos detalhes do jogo {game['id']}: {type(error).__name__}")
             continue
-        detail["_game_id"] = game ["id"]
+        detail["_game_id"] = game["id"]
         details.append(detail)
         processed.append(game)
         time.sleep(config["pause_seconds"])
 
-    
+    details_key = None
+    if details:
+        details_key = save_jsonl(s3, bucket, "bronze/rawg/details", details, run_ts)
+        for games in processed:
+            state[str(game["id"])] = game.get("updated")
+        save_state(s3, bucket, state)
+    print(f"Detalhes salvos: {len(details)} jogos")
 
-    return {"games": len(games), "games_list_file": list_key}
+    return {
+        "games": len(games),
+        "details": len(details),
+        "failed_details": len(pending) - len(details),
+        "games_list_file": list_key,
+        "game_details_file": details_key,
+    }
 
 if __name__ == "__main__":
     print(lambda_handler({}, None))
