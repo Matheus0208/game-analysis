@@ -4,7 +4,7 @@ import json
 import os
 import time
 from datetime import datetime, timezone
-
+import logging
 import boto3
 import requests
 from requests.adapters import HTTPAdapter
@@ -23,17 +23,58 @@ def load_config():
 
 def create_session():
     """Cria uma sessão do requests com novas tentativas automáticas."""
+    logging.getLogger("urllib3.connectionpool").setLevel(logging.ERROR)
+
     retry = Retry(
         total=5,
         backoff_factor=2,
         status_forcelist=[429, 500, 502, 503, 504, 520, 521, 522, 523, 524],
         allowed_methods=["GET"],
+        raise_on_status=False,
     )
     adapter = HTTPAdapter(max_retries=retry)
 
     session = requests.Session()
     session.mount("https://", adapter)
+
+    class RawgError(RuntimeError):
+        pass
+
+    def rawg_get_json(session, path, params):
+        try:
+            response = session.get(f"{BASE_URL}{path}", params=params, timeout=30)
+        except requests.RequestException as error:
+            raise RawgError(
+                f"Falha na requisição à RAWG ({type(error).__name__})"
+            ) from None
+
+        if not 200 <= response.status_code < 300:
+            raise RawgError(f"RAWG respondeu com HTTP {response.status_code}")
+
+        try:
+            return response.json()
+        except requests.exceptions.JSONDecodeError:
+            raise RawgError("RAWG retornou JSON inválido") from None
     return session
+
+class RawgError(RuntimeError):
+    pass
+
+def rawg_get_json(session, path, params):
+    try:
+        response = session.get(f"{BASE_URL}{path}", params=params, timeout=30)
+    except requests.RequestException as error:
+        raise RawgError(
+            f"Falha na requisição à RAWG ({type(error).__name__})"
+        ) from None
+
+    if not 200 <= response.status_code < 300:
+        raise RawgError(f"RAWG respondeu com HTTP {response.status_code}")
+
+    try:
+        return response.json()
+    except requests.exceptions.JSONDecodeError:
+        raise RawgError("RAWG retornou JSON inválido") from None
 
 
 def fetch_games_list(session, config, api_key):
@@ -49,9 +90,7 @@ def fetch_games_list(session, config, api_key):
     games = []
     for page in range(1, config["max_pages"] + 1):
         params["page"] = page
-        response = session.get(f"{BASE_URL}/games", params=params, timeout=30)
-        response.raise_for_status()
-        data = response.json()
+        data = rawg_get_json(session, "/games", params)
 
         for game in data["results"]:
             game.pop("short_screenshots", None)
@@ -62,27 +101,13 @@ def fetch_games_list(session, config, api_key):
         if not data.get("next"):
             break
 
-        if not response.ok:
-            raise RuntimeError(f"RAWG respondeu com status {response.status_code}")
-
         time.sleep(config["pause_seconds"])
 
     return games
 
 def fetch_game_details(session, game_id, api_key):
     """Busca os detalhes de um jogo e devolve o dicionário da resposta."""
-    response =session.get(
-        f"{BASE_URL}/games/{game_id}",
-        params = {"key": api_key},
-        timeout=30,
-    )
-    response.raise_for_status()
-
-    if not response.ok:
-        raise RuntimeError(f"RAWG respondeu com status {response.status_code}")
-
-    return response.json()
-
+    return rawg_get_json(session, f"/games/{game_id}", {"key": api_key})
 
 def save_jsonl(s3, bucket, prefix, records, run_ts):
     """Salva os registros como JSON Lines no S3 e devolve o caminho do arquivo."""
@@ -106,10 +131,11 @@ def save_jsonl(s3, bucket, prefix, records, run_ts):
 def load_state(s3, bucket):
     """Lê o arquivo de controle do S3."""
     try:
-        response = s3.head_object(Bucket=BUCKET, Key=STATES_KEY)
+        response = s3.get_object(Bucket=bucket, Key=STATE_KEY)
     except s3.exceptions.NoSuchKey:
         print("Controle não encontrado: primeira execução.")
         return {}
+
     return json.loads(response["Body"].read())
 
 
@@ -117,7 +143,7 @@ def save_state(s3, bucket, state):
     """Grava o dicionário de controle no S3, em STATE_KEY."""
     s3.put_object(
         Bucket=bucket,
-        Key=STATES_KEY,
+        Key=STATE_KEY,
         Body=json.dumps(state).encode("utf-8"),
         ContentType="application/json",
     )
@@ -125,10 +151,12 @@ def save_state(s3, bucket, state):
 
 def select_games_for_details(games, state, limit):
     """Devolve os jogos que precisam de detalhes, até o limite."""
-    pending = [
-        game for game in games
-        if state.get(str(game["id"])) != game.get("update")
-    ]
+    pending = []
+    for game in games:
+        game_id = str(game["id"])
+        if game_id not in state or state[game_id] != game.get("updated"):
+            pending.append(game)
+
     return pending[:limit]
 
 
@@ -155,8 +183,8 @@ def lambda_handler(event, context):
     for game in pending:
         try:
             detail = fetch_game_details(session, game["id"], api_key)
-        except requests.RequestException as error:
-            print(f"Falha nos detalhes do jogo {game['id']}: {type(error).__name__}")
+        except RawgError as error:
+            print(f"Falha nos detalhes do jogo {game['id']}: {error}")
             continue
         detail["_game_id"] = game["id"]
         details.append(detail)
@@ -166,10 +194,9 @@ def lambda_handler(event, context):
     details_key = None
     if details:
         details_key = save_jsonl(s3, bucket, "bronze/rawg/details", details, run_ts)
-        for games in processed:
+        for game in processed:
             state[str(game["id"])] = game.get("updated")
         save_state(s3, bucket, state)
-    print(f"Detalhes salvos: {len(details)} jogos")
 
     return {
         "games": len(games),
