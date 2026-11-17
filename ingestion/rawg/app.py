@@ -118,7 +118,7 @@ def save_jsonl(s3, bucket, prefix, records, run_ts):
     ]
     body = "\n".join(lines)
 
-    key = f"{prefix}/dt={run_ts:%Y-%m-%d}/run_{run_ts:%Y%m%d%T%H%M%S}.jsonl"
+    key = f"{prefix}/dt={run_ts:%Y-%m-%d}/run_{run_ts:%Y%m%dT%H%M%S}.jsonl"
     s3.put_object(
         Bucket=bucket,
         Key=key,
